@@ -11,23 +11,23 @@ type Service struct {
 }
 
 type Endpoint struct {
-	name    string
-	version string
-	url     string
-	alive   bool
+	Name    string `json:"name"`
+	Version string `json:"version"`
+	Url     string `json:"url"`
+	Alive   bool   `json:"alive"`
 }
 
 func NewEndpoint(name string, version string, url string, alive bool) *Endpoint {
 	return &Endpoint{
-		name:    name,
-		version: version,
-		url:     url,
-		alive:   alive,
+		Name:    name,
+		Version: version,
+		Url:     url,
+		Alive:   alive,
 	}
 }
 
 func (p *Endpoint) Key() string {
-	return p.name + "@" + p.version
+	return p.Name + "@" + p.Version
 }
 
 func NewService(url string, password string) *Service {
@@ -45,7 +45,7 @@ func (s *Service) GetAliveEndpoints(endpoints []Endpoint) ([]Endpoint, error) {
 		return endpoints, nil
 	}
 
-	if All(endpoints, func(p Endpoint) bool { return p.alive == true }) {
+	if All(endpoints, func(p Endpoint) bool { return p.Alive == true }) {
 		return endpoints, nil
 	}
 
@@ -59,25 +59,25 @@ func (s *Service) GetAliveEndpoints(endpoints []Endpoint) ([]Endpoint, error) {
 		}
 
 		result[i] = Endpoint{
-			name:    p.name,
-			version: p.version,
-			url:     url,
+			Name:    p.Name,
+			Version: p.Version,
+			Url:     url,
 		}
 	}
 
 	for i, p := range result {
-		alive, err := s.db.Get("alives." + p.url).Result()
+		alive, err := s.db.Get("alives." + p.Url).Result()
 
 		if err != nil {
 			panic("Can not find alive url for " + p.Key())
 		}
 
 		if alive == p.Key() {
-			result[i].alive = true
+			result[i].Alive = true
 		} else {
-			result[i].alive = false
+			result[i].Alive = false
 
-			_, err := s.db.SRem(p.Key(), p.url).Result()
+			_, err := s.db.SRem(p.Key(), p.Url).Result()
 			if err != nil {
 				panic("can not remove not alive url")
 			}
@@ -107,8 +107,8 @@ func (s *Service) FindDependencies(deps map[string]string) ([]Endpoint, error) {
 	i := 0
 	for key, val := range deps {
 		endpoints[i] = Endpoint{
-			name:    key,
-			version: val,
+			Name:    key,
+			Version: val,
 		}
 		i++
 	}
@@ -124,12 +124,23 @@ func (s *Service) FindDependencies(deps map[string]string) ([]Endpoint, error) {
 
 func (s *Service) Register(p *Endpoint) (*Service, error) {
 	pkey := "endpoints." + p.Key()
-	akey := "alives." + p.url
+	s.db.SAdd(pkey, p.Url)
 
-	s.db.SAdd(pkey, p.url)
-
-	duration, _ := time.ParseDuration("10s")
-	s.db.Set(akey, p.Key(), duration)
+	go s.SetEndpointHealth(p)
 
 	return s, nil
+}
+
+func (s *Service) SetEndpointHealth(p *Endpoint) error {
+	akey := "alives." + p.Url
+
+	aliveDuration, _ := time.ParseDuration("10s")
+	s.db.Set(akey, p.Key(), aliveDuration)
+
+	select {
+	case <-time.After(aliveDuration):
+		go s.SetEndpointHealth(p)
+	}
+
+	return nil
 }
