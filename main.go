@@ -15,6 +15,7 @@ type Dependency struct {
 	name    string
 	version string
 	url     string
+	alive   bool
 }
 
 func (dep *Dependency) Key() string {
@@ -23,68 +24,82 @@ func (dep *Dependency) Key() string {
 
 const VASGO_URL = "localhost:6379"
 
-func NewService() *Service {
+func NewService(url string, password string) *Service {
 	client := redis.NewClient(&redis.Options{
-		Addr:     VASGO_URL,
-		Password: "",
+		Addr:     url,
+		Password: password,
 		DB:       0,
 	})
 
 	return &Service{db: client}
 }
 
-func (s *Service) GetAliveDependencies(deps map[string]Dependency, aliveDeps map[string]Dependency) map[string]Dependency {
+func (s *Service) GetAliveDependencies(deps []Dependency) ([]Dependency, error) {
 	if len(deps) == 0 {
-		return aliveDeps
+		return deps, nil
 	}
 
-	for name, dep := range deps {
-		key := dep.Key()
-		url, err := s.db.SRandMember(key).Result()
+	if All(deps, func(dep Dependency) bool { return dep.alive == true }) {
+		return deps, nil
+	}
 
-		if err != nil {
-			panic("Can not find dependency for " + key)
+	result := make([]Dependency, len(deps))
+
+	for i, dep := range deps {
+		url, err := s.db.SRandMember(dep.Key()).Result()
+
+		if err != nil || url == "" {
+			panic("Can not find dependency for " + dep.Key())
 		}
 
-		alive, err := s.db.Get("alives." + url).Result()
+		result[i] = Dependency{
+			name:    dep.name,
+			version: dep.version,
+			url:     url,
+		}
+	}
+
+	for i, dep := range deps {
+		alive, err := s.db.Get("alives." + dep.url).Result()
 
 		if err != nil {
-			panic("Can not find alive url for " + key)
+			panic("Can not find alive url for " + dep.Key())
 		}
 
 		if alive == dep.Key() {
-			aliveDeps[dep.name] = Dependency{
-				name:    name,
-				version: dep.version,
-				url:     url,
-			}
-			delete(deps, dep.name)
+			result[i].alive = true
 		} else {
-			_, err := s.db.SRem(dep.Key(), url).Result()
+			result[i].alive = false
+
+			_, err := s.db.SRem(dep.Key(), dep.url).Result()
 			if err != nil {
 				panic("can not remove not alive url")
 			}
 		}
 	}
 
-	return s.GetAliveDependencies(deps, aliveDeps)
+	return s.GetAliveDependencies(result)
 }
 
-func (s *Service) FindDependencies(dependencies []Dependency) ([]Dependency, error) {
-	deps := make(map[string]Dependency)
-
-	for _, dep := range dependencies {
-		deps[dep.name] = dep
+func All(collection []Dependency, f func(Dependency) bool) bool {
+	for _, v := range collection {
+		if !f(v) {
+			return false
+		}
 	}
 
-	aliveDeps := s.GetAliveDependencies(deps, make(map[string]Dependency))
+	return true
+}
 
-	i := 0
-	result := make([]Dependency, len(aliveDeps))
+func (s *Service) FindDependencies(deps []Dependency) ([]Dependency, error) {
+	if len(deps) == 0 {
+		return deps, nil
+	}
 
-	for _, dep := range aliveDeps {
-		result[i] = dep
-		i++
+	result, err := s.GetAliveDependencies(deps)
+
+	if err != nil {
+		panic("Error on finding alive dependencies")
 	}
 
 	return result, nil
@@ -103,7 +118,7 @@ func (s *Service) Register(service Dependency) (*Service, error) {
 }
 
 func main() {
-	service := NewService()
+	service := NewService(VASGO_URL, "")
 
 	app := Dependency{
 		name:    "app",
@@ -139,6 +154,7 @@ func main() {
 	result, _ := service.FindDependencies(dependencies)
 
 	for _, r := range result {
-		fmt.Printf("result: %v@%v => %v\n", r.name, r.version, r.url)
+		fmt.Printf("result: %v@%v => %v, alive? %v\n", r.name, r.version, r.url, r.alive)
 	}
+
 }
