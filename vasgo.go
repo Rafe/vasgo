@@ -1,7 +1,6 @@
-package main
+package vasgo
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/go-redis/redis"
@@ -18,11 +17,18 @@ type Endpoint struct {
 	alive   bool
 }
 
+func NewEndpoint(name string, version string, url string, alive bool) *Endpoint {
+	return &Endpoint{
+		name:    name,
+		version: version,
+		url:     url,
+		alive:   alive,
+	}
+}
+
 func (p *Endpoint) Key() string {
 	return p.name + "@" + p.version
 }
-
-const VASGO_URL = "localhost:6379"
 
 func NewService(url string, password string) *Service {
 	client := redis.NewClient(&redis.Options{
@@ -116,7 +122,7 @@ func (s *Service) FindDependencies(deps map[string]string) ([]Endpoint, error) {
 	return result, nil
 }
 
-func (s *Service) Register(p Endpoint) (*Service, error) {
+func (s *Service) Register(p *Endpoint) (*Service, error) {
 	pkey := "endpoints." + p.Key()
 	akey := "alives." + p.url
 
@@ -126,49 +132,4 @@ func (s *Service) Register(p Endpoint) (*Service, error) {
 	s.db.Set(akey, p.Key(), duration)
 
 	return s, nil
-}
-
-func main() {
-	service := NewService(VASGO_URL, "")
-
-	app := Endpoint{
-		name:    "app",
-		version: "0.0.1",
-		url:     "app.beansauce.io",
-	}
-
-	app2 := Endpoint{
-		name:    "app",
-		version: "0.0.1",
-		url:     "beta.app.beansauce.io",
-	}
-
-	web := Endpoint{
-		name:    "web",
-		version: "0.1.2",
-		url:     "web.beansauce.io",
-	}
-
-	db := Endpoint{
-		name:    "db",
-		version: "0.1.3",
-		url:     "db.beansauce.io",
-	}
-
-	service.Register(app)
-	service.Register(app2)
-	service.Register(web)
-	service.Register(db)
-
-	dependencies := map[string]string{
-		"app": "0.0.1",
-		"web": "0.1.2",
-		"db":  "0.1.3",
-	}
-
-	result, _ := service.FindDependencies(dependencies)
-
-	for _, r := range result {
-		fmt.Printf("result: %v@%v => %v, alive? %v\n", r.name, r.version, r.url, r.alive)
-	}
 }
